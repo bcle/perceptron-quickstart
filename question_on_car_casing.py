@@ -19,7 +19,7 @@ if not IMAGE_PATH.exists():
   urlretrieve(IMAGE_URL, IMAGE_PATH)
 
 # Ask a grounded question
-prompt = "Is a person about to commit or has committed a car break-in?"
+prompt = "Is a person showing suspicious behavior that could lead to a crime such as car break-in? Answer yes or no, followed by a colon, followed by your reasoning."
 result = question(
   str(IMAGE_PATH),
   prompt,
