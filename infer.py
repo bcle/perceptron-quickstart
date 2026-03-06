@@ -28,12 +28,13 @@ def _post(url: str, body: bytes) -> dict:
         return json.loads(resp.read())
 
 
-def infer(image_path: str, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False) -> dict:
-    data_uri = _image_data_uri(image_path)
+def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False, think: bool = False) -> dict:
     content = []
     if hint:
         content.append({"type": "text", "text": f"<hint>{hint.upper()}</hint>"})
-    content.append({"type": "image_url", "image_url": {"url": data_uri}})
+    if image_path:
+        data_uri = _image_data_uri(image_path)
+        content.append({"type": "image_url", "image_url": {"url": data_uri}})
     content.append({"type": "text", "text": prompt})
 
     body = {
@@ -41,6 +42,7 @@ def infer(image_path: str, url: str, prompt: str, hint: str | None, max_tokens: 
         "temperature": 0.0,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": content}],
+        "chat_template_kwargs": {"enable_thinking": think},
     }
 
     if verbose:
@@ -125,26 +127,36 @@ def _draw_boxes(image_path: str, boxes: list[dict], output_path: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Send an image to the Isaac inference server")
-    parser.add_argument("image", help="Path to the image file")
+    parser.add_argument("image", nargs="?", help="Path to the image file")
+    parser.add_argument("--no-image", action="store_true", help="Send only the prompt, no image")
     parser.add_argument("--url", default="http://localhost:8091/v1", help="Server base URL")
 #   parser.add_argument("--prompt", default="find people and vehicles")
     parser.add_argument("--prompt", default="Detect all people and vehicles in this image.")
     parser.add_argument("--hint", default="box", help="Structured output hint (box/point/polygon), or empty to disable")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--think", action="store_true", help="Enable chain-of-thought reasoning (disabled by default)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Also print the JSON request before the response")
     parser.add_argument("-o", "--output", metavar="FILE", help="Draw bounding boxes on the image and save to FILE")
     args = parser.parse_args()
 
-    hint = args.hint or None
-    result = infer(args.image, args.url, args.prompt, hint, args.max_tokens, verbose=args.verbose)
+    if args.no_image:
+        image_path = None
+    else:
+        if not args.image:
+            parser.error("image is required unless --no-image is set")
+        image_path = args.image
+
+    hint_default_set = args.hint == parser.get_default("hint")
+    hint = (args.hint or None) if (image_path or not hint_default_set) else None
+    result = infer(image_path, args.url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think)
 
     print(json.dumps(result, indent=2))
 
-    if args.output:
+    if args.output and image_path:
         content = result["choices"][0]["message"]["content"]
         boxes = _parse_boxes(content)
         if boxes:
-            _draw_boxes(args.image, boxes, args.output)
+            _draw_boxes(image_path, boxes, args.output)
         else:
             print("No bounding boxes found in response.")
 
