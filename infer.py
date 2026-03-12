@@ -137,6 +137,7 @@ def main():
     parser.add_argument("--think", action="store_true", help="Enable chain-of-thought reasoning (disabled by default)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Also print the JSON request before the response")
     parser.add_argument("-o", "--output", metavar="FILE", help="Draw bounding boxes on the image and save to FILE")
+    parser.add_argument("--contentonly", action="store_true", help="Print only the content field of the response")
     args = parser.parse_args()
 
     if args.no_image:
@@ -150,7 +151,10 @@ def main():
     hint = (args.hint or None) if (image_path or not hint_default_set) else None
     result = infer(image_path, args.url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think)
 
-    print(json.dumps(result, indent=2))
+    if args.contentonly:
+        print(result["choices"][0]["message"]["content"])
+    else:
+        print(json.dumps(result, indent=2))
 
     if args.output and image_path:
         content = result["choices"][0]["message"]["content"]
