@@ -3,11 +3,13 @@ import argparse
 import base64
 import json
 import mimetypes
+import os
 import re
 import urllib.request
 from pathlib import Path
 
 DEFAULT_MAX_TOKENS = 512
+PUBLIC_API_URL = "https://api.perceptron.inc/v1"
 
 
 def _image_data_uri(image_path: str) -> str:
@@ -17,18 +19,30 @@ def _image_data_uri(image_path: str) -> str:
     return f"data:{mime};base64,{b64}"
 
 
-def _post(url: str, body: bytes) -> dict:
+def _get(url: str, path: str, api_key: str | None = None) -> dict:
+    headers = {"User-Agent": "curl/8.5.0"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url.rstrip("/") + path, headers=headers)
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())
+
+
+def _post(url: str, body: bytes, api_key: str | None = None) -> dict:
+    headers = {"Content-Type": "application/json", "User-Agent": "curl/8.5.0"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(
         url.rstrip("/") + "/chat/completions",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
 
 
-def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False, think: bool = False) -> dict:
+def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False, think: bool = False, api_key: str | None = None) -> dict:
     content = []
     if hint:
         content.append({"type": "text", "text": f"<hint>{hint.upper()}</hint>"})
@@ -59,7 +73,7 @@ def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_t
         print(json.dumps(display, indent=2))
         print("=== RESPONSE ===")
 
-    return _post(url, json.dumps(body).encode())
+    return _post(url, json.dumps(body).encode(), api_key=api_key)
 
 
 def _parse_boxes(text: str) -> list[dict]:
@@ -129,7 +143,9 @@ def main():
     parser = argparse.ArgumentParser(description="Send an image to the Isaac inference server")
     parser.add_argument("image", nargs="?", help="Path to the image file")
     parser.add_argument("--no-image", action="store_true", help="Send only the prompt, no image")
-    parser.add_argument("--url", default="http://localhost:8091/v1", help="Server base URL")
+    url_group = parser.add_mutually_exclusive_group()
+    url_group.add_argument("--url", default="http://localhost:8091/v1", help="Server base URL")
+    url_group.add_argument("--public-api", action="store_true", help=f"Use the public API endpoint ({PUBLIC_API_URL})")
 #   parser.add_argument("--prompt", default="find people and vehicles")
     parser.add_argument("--prompt", default="Detect all people and vehicles in this image.")
     parser.add_argument("--hint", default="box", help="Structured output hint (box/point/polygon), or empty to disable")
@@ -138,7 +154,18 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Also print the JSON request before the response")
     parser.add_argument("-o", "--output", metavar="FILE", help="Draw bounding boxes on the image and save to FILE")
     parser.add_argument("--contentonly", action="store_true", help="Print only the content field of the response")
+    parser.add_argument("--api-key", default=None, help="API key (overrides PERCEPTRON_API_KEY env var)")
+    parser.add_argument("--list-models", action="store_true", help="List available models and exit")
     args = parser.parse_args()
+
+    url = PUBLIC_API_URL if args.public_api else args.url
+    api_key = args.api_key or os.environ.get("PERCEPTRON_API_KEY")
+
+    if args.list_models:
+        data = _get(url, "/models", api_key=api_key)
+        for m in data.get("data", []):
+            print(m["id"])
+        return
 
     if args.no_image:
         image_path = None
@@ -149,7 +176,7 @@ def main():
 
     hint_default_set = args.hint == parser.get_default("hint")
     hint = (args.hint or None) if (image_path or not hint_default_set) else None
-    result = infer(image_path, args.url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think)
+    result = infer(image_path, url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think, api_key=api_key)
 
     if args.contentonly:
         print(result["choices"][0]["message"]["content"])
