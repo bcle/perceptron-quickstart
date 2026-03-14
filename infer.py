@@ -42,7 +42,7 @@ def _post(url: str, body: bytes, api_key: str | None = None) -> dict:
         return json.loads(resp.read())
 
 
-def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False, think: bool = False, api_key: str | None = None) -> dict:
+def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False, think: bool = False, api_key: str | None = None, model: str = "isaac-0.2-1b") -> dict:
     content = []
     if hint:
         content.append({"type": "text", "text": f"<hint>{hint.upper()}</hint>"})
@@ -52,7 +52,7 @@ def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_t
     content.append({"type": "text", "text": prompt})
 
     body = {
-        "model": "isaac-0.2-1b",
+        "model": model,
         "temperature": 0.0,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": content}],
@@ -149,6 +149,7 @@ def main():
 #   parser.add_argument("--prompt", default="find people and vehicles")
     parser.add_argument("--prompt", default="Detect all people and vehicles in this image.")
     parser.add_argument("--hint", default="box", help="Structured output hint (box/point/polygon), or empty to disable")
+    parser.add_argument("--model", default="isaac-0.2-1b", help="Model to use for inference")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--think", action="store_true", help="Enable chain-of-thought reasoning (disabled by default)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Also print the JSON request before the response")
@@ -176,7 +177,7 @@ def main():
 
     hint_default_set = args.hint == parser.get_default("hint")
     hint = (args.hint or None) if (image_path or not hint_default_set) else None
-    result = infer(image_path, url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think, api_key=api_key)
+    result = infer(image_path, url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think, api_key=api_key, model=args.model)
 
     if args.contentonly:
         print(result["choices"][0]["message"]["content"])
