@@ -42,38 +42,89 @@ def _post(url: str, body: bytes, api_key: str | None = None) -> dict:
         return json.loads(resp.read())
 
 
-def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False, think: bool = False, api_key: str | None = None, model: str = "isaac-0.2-1b") -> dict:
+def _post_ollama(url: str, body: bytes) -> dict:
+    """Post to ollama's native /api/chat endpoint and return an OpenAI-compatible response.
+
+    The native endpoint properly respects think:false (suppressing chain-of-thought),
+    unlike the /v1/chat/completions compatibility shim. Image inputs use the 'images'
+    field (list of raw base64 strings) rather than image_url content items.
+    """
+    base = url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    req = urllib.request.Request(
+        base + "/api/chat",
+        data=body,
+        headers={"Content-Type": "application/json", "User-Agent": "curl/8.5.0"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        native = json.loads(resp.read())
+    # Wrap native response in OpenAI-compatible shape so the rest of the code is unchanged
+    msg = native.get("message", {})
+    return {
+        "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": native.get("prompt_eval_count", 0),
+            "completion_tokens": native.get("eval_count", 0),
+            "total_tokens": native.get("prompt_eval_count", 0) + native.get("eval_count", 0),
+        },
+    }
+
+
+def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_tokens: int, verbose: bool = False, think: bool = False, api_key: str | None = None, model: str = "isaac-0.2-1b", ollama: bool = False) -> dict:
     content = []
     if hint:
         content.append({"type": "text", "text": f"<hint>{hint.upper()}</hint>"})
-    if image_path:
-        data_uri = _image_data_uri(image_path)
-        content.append({"type": "image_url", "image_url": {"url": data_uri}})
-    content.append({"type": "text", "text": prompt})
 
-    body = {
-        "model": model,
-        "temperature": 0.0,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": content}],
-        "think": think,                                    # ollama extension (ignored by vLLM)
-        "chat_template_kwargs": {"enable_thinking": think},  # vLLM convention (ignored by ollama)
-    }
+    if ollama:
+        # Native ollama /api/chat format: images are a separate list of raw base64 strings
+        images = []
+        if image_path:
+            images.append(base64.b64encode(Path(image_path).read_bytes()).decode())
+        text = (f"<hint>{hint.upper()}</hint>\n" if hint else "") + prompt
+        message = {"role": "user", "content": text}
+        if images:
+            message["images"] = images
+        body = {
+            "model": model,
+            "messages": [message],
+            "think": think,   # properly respected by native endpoint; False suppresses chain-of-thought
+            "stream": False,
+            "options": {"temperature": 0.0, "num_predict": max_tokens},
+        }
+    else:
+        if image_path:
+            data_uri = _image_data_uri(image_path)
+            content.append({"type": "image_url", "image_url": {"url": data_uri}})
+        content.append({"type": "text", "text": prompt})
+        body = {
+            "model": model,
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": content}],
+            "think": think,                                    # ollama extension (ignored by vLLM)
+            "chat_template_kwargs": {"enable_thinking": think},  # vLLM convention (ignored by ollama)
+        }
 
     if verbose:
         # Truncate base64 data for readability
         display = json.loads(json.dumps(body))
         for msg in display.get("messages", []):
-            for part in msg.get("content", []):
+            for part in (msg.get("content", []) if isinstance(msg.get("content"), list) else []):
                 if part.get("type") == "image_url":
                     url_val = part["image_url"]["url"]
                     if ";base64," in url_val:
                         prefix, data = url_val.split(";base64,", 1)
                         part["image_url"]["url"] = f"{prefix};base64,<{len(data)} chars>"
+            if msg.get("images"):
+                msg["images"] = [f"<{len(i)} chars>" for i in msg["images"]]
         print("=== REQUEST ===")
         print(json.dumps(display, indent=2))
         print("=== RESPONSE ===")
 
+    if ollama:
+        return _post_ollama(url, json.dumps(body).encode())
     return _post(url, json.dumps(body).encode(), api_key=api_key)
 
 
@@ -153,6 +204,7 @@ def main():
     parser.add_argument("--model", default="isaac-0.2-1b", help="Model to use for inference")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--think", action="store_true", help="Enable chain-of-thought reasoning (disabled by default)")
+    parser.add_argument("--ollama", action="store_true", help="Use ollama native /api/chat endpoint (properly suppresses thinking; required for think=false to work)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Also print the JSON request before the response")
     parser.add_argument("-o", "--output", metavar="FILE", help="Draw bounding boxes on the image and save to FILE")
     parser.add_argument("--contentonly", action="store_true", help="Print only the content field of the response")
@@ -178,7 +230,7 @@ def main():
 
     hint_default_set = args.hint == parser.get_default("hint")
     hint = (args.hint or None) if (image_path or not hint_default_set) else None
-    result = infer(image_path, url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think, api_key=api_key, model=args.model)
+    result = infer(image_path, url, args.prompt, hint, args.max_tokens, verbose=args.verbose, think=args.think, api_key=api_key, model=args.model, ollama=args.ollama)
 
     if args.contentonly:
         print(result["choices"][0]["message"]["content"])
