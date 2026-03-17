@@ -56,7 +56,8 @@ def infer(image_path: str | None, url: str, prompt: str, hint: str | None, max_t
         "temperature": 0.0,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": content}],
-        "chat_template_kwargs": {"enable_thinking": think},
+        "think": think,                                    # ollama extension (ignored by vLLM)
+        "chat_template_kwargs": {"enable_thinking": think},  # vLLM convention (ignored by ollama)
     }
 
     if verbose:
